@@ -3,7 +3,7 @@ name: Build and deploy to Nuget
 on:
   push:
     branches:
-      - dev
+      - "*"
     tags:
       - "*"
 env:
@@ -11,28 +11,9 @@ env:
   TERM: xterm
   
 jobs:
-  test-slow:  # slow tests that should run in parallel
+  build-for-tests:
     runs-on: ubuntu-latest
-    
-    services:
-      redis:
-        image: redis
-        ports:
-          - 6379/tcp
-        options: --entrypoint redis-server
-    
-    strategy:
-      matrix:
-        dotnet:
-          - net7.0
-          - net6.0
-          - netcoreapp3.1
-        test:
-          - "tests/Proto.Cluster.Tests/*.csproj"
-          - "tests/Proto.Cluster.PartitionIdentity.Tests/*.csproj"
-          - "tests/Proto.Cluster.RedisIdentity.Tests/*.csproj"
-          - "tests/Proto.Cluster.PubSub.Tests/*.csproj"
-          
+
     steps:
       - uses: actions/checkout@v3
       - uses: actions/setup-dotnet@v2
@@ -45,16 +26,70 @@ jobs:
             6.0.x
             3.1.x
 
-      - name: Run tests ${{ matrix.test }}
+      - name: Build for tests
         timeout-minutes: 15
-        env:
-          ConnectionStrings__Redis: localhost:${{ job.services.redis.ports[6379] }},syncTimeout=10000
         run: |
-          dotnet test ${{ matrix.test }} -c Release -f ${{ matrix.dotnet }} --logger GitHubActions
+          dotnet build -c Release tests/Proto.Cluster.Tests/*.csproj
+          dotnet build -c Release tests/Proto.Cluster.PartitionIdentity.Tests/*.csproj
+          dotnet build -c Release tests/Proto.Cluster.RedisIdentity.Tests/*.csproj
+          dotnet build -c Release tests/Proto.Cluster.PubSub.Tests/*.csproj
+          dotnet build -c Release tests/Proto.Actor.Tests/*.csproj
+          dotnet build -c Release tests/Proto.Remote.Tests/*.csproj
+          dotnet build -c Release tests/Proto.Persistence.Tests/*.csproj
+          dotnet build -c Release tests/Proto.OpenTelemetry.Tests/*.csproj
+          dotnet build -c Release tests/Proto.Cluster.CodeGen.Tests/*.csproj
+
+      - name: Upload
+        uses: actions/upload-artifact@v3
+        with:
+          name: binaries-for-tests
+          path: .
+  
+#  test-slow:  # slow tests that should run in parallel
+#    runs-on: ubuntu-latest
+#    
+#    services:
+#      redis:
+#        image: redis
+#        ports:
+#          - 6379/tcp
+#        options: --entrypoint redis-server
+#    
+#    strategy:
+#      matrix:
+#        dotnet:
+#          - net7.0
+#          - net6.0
+#          - netcoreapp3.1
+#        test:
+#          - "tests/Proto.Cluster.Tests/*.csproj"
+#          - "tests/Proto.Cluster.PartitionIdentity.Tests/*.csproj"
+#          - "tests/Proto.Cluster.RedisIdentity.Tests/*.csproj"
+#          - "tests/Proto.Cluster.PubSub.Tests/*.csproj"
+#          
+#    steps:
+#      - uses: actions/checkout@v3
+#      - uses: actions/setup-dotnet@v2
+#        with:
+#          dotnet-version: "7.0.x"
+#          include-prerelease: true
+#      - uses: actions/setup-dotnet@v2
+#        with:
+#          dotnet-version: |
+#            6.0.x
+#            3.1.x
+#
+#      - name: Run tests ${{ matrix.test }}
+#        timeout-minutes: 15
+#        env:
+#          ConnectionStrings__Redis: localhost:${{ job.services.redis.ports[6379] }},syncTimeout=10000
+#        run: |
+#          dotnet test ${{ matrix.test }} -c Release -f ${{ matrix.dotnet }} --logger GitHubActions
           
   test-fast:  # fast tests where setting up a parallel job run is more overhead than just running the tests side by side
     runs-on: ubuntu-latest
-
+    needs: [build-for-tests]
+    
     strategy:
       matrix:
         test:
@@ -65,7 +100,10 @@ jobs:
           - "tests/Proto.Cluster.CodeGen.Tests/*.csproj"
             
     steps:
-      - uses: actions/checkout@v3
+      - name: Download binaries
+        uses: actions/download-artifact@v3
+        with:
+          name: binaries-for-tests
       - uses: actions/setup-dotnet@v2
         with:
           dotnet-version: "7.0.x"
@@ -78,7 +116,7 @@ jobs:
       - name: Run tests ${{ matrix.test }}
         timeout-minutes: 15
         run: |
-          dotnet test ${{ matrix.test }} -c Release --logger GitHubActions
+          dotnet test ${{ matrix.test }} -c Release --logger GitHubActions --no-build
 
   nuget:
     runs-on: ubuntu-latest
